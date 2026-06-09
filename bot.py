@@ -192,7 +192,7 @@ Focus on momentum, news catalysts, and technical setups.
 Aggressive but risk-managed strategy."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=1000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         system=system_prompt,

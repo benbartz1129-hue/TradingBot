@@ -11,6 +11,7 @@ import json
 import time
 import requests
 import anthropic
+import robin_stocks.robinhood as rh
 from datetime import datetime
 import pytz
 
@@ -21,111 +22,130 @@ PUSHOVER_USER_KEY   = os.environ["PUSHOVER_USER_KEY"]
 ROBINHOOD_USERNAME  = os.environ["ROBINHOOD_USERNAME"]
 ROBINHOOD_PASSWORD  = os.environ["ROBINHOOD_PASSWORD"]
 APPROVAL_TIMEOUT    = int(os.environ.get("APPROVAL_TIMEOUT", "1800"))  # 30 min default
+ACCOUNT_NUMBER      = os.environ["RH_ACCOUNT_NUMBER"]
 
-# Robinhood Agentic account number
-ACCOUNT_NUMBER      = os.environ["RH_ACCOUNT_NUMBER"]  # 496478850
-
-# ── Robinhood API helpers ────────────────────────────────────────────────────
-RH_BASE = "https://api.robinhood.com"
-
+# ── Robinhood helpers (via robin_stocks) ─────────────────────────────────────
 def rh_login():
-    """Login to Robinhood and return auth token."""
-    r = requests.post(f"{RH_BASE}/api-token-auth/", json={
-        "username": ROBINHOOD_USERNAME,
-        "password": ROBINHOOD_PASSWORD,
-        "grant_type": "password",
-        "client_id": "c82SH0WZOsabOXGP2sxqcj34FFK0aYdS",
-        "scope": "internal",
-        "expires_in": 86400,
-        "device_token": os.environ.get("RH_DEVICE_TOKEN", ""),
-    })
-    r.raise_for_status()
-    return r.json().get("access_token")
+    """Login to Robinhood using robin_stocks."""
+    login = rh.login(
+        username=ROBINHOOD_USERNAME,
+        password=ROBINHOOD_PASSWORD,
+        expiresIn=86400,
+        store_session=True,
+        mfa_code=None
+    )
+    return login
 
-def rh_headers(token):
-    return {"Authorization": f"Bearer {token}"}
-
-def get_portfolio(token):
+def get_portfolio():
     """Get account portfolio value and buying power."""
-    r = requests.get(
-        f"{RH_BASE}/portfolios/{ACCOUNT_NUMBER}/",
-        headers=rh_headers(token)
-    )
-    r.raise_for_status()
-    return r.json()
+    profile = rh.profiles.load_account_profile(account_number=ACCOUNT_NUMBER)
+    portfolio = rh.profiles.load_portfolio_profile(account_number=ACCOUNT_NUMBER)
+    buying_power = float(profile.get("buying_power", 0))
+    equity = float(portfolio.get("equity", 0)) or buying_power
+    return equity, buying_power
 
-def get_positions(token):
+def get_positions():
     """Get current open positions."""
-    r = requests.get(
-        f"{RH_BASE}/positions/?account={ACCOUNT_NUMBER}&nonzero=true",
-        headers=rh_headers(token)
-    )
-    r.raise_for_status()
-    return r.json().get("results", [])
+    positions = rh.get_open_stock_positions(account_number=ACCOUNT_NUMBER)
+    result = []
+    for p in (positions or []):
+        try:
+            symbol = rh.get_symbol_by_url(p.get("instrument"))
+            result.append({
+                "symbol": symbol,
+                "quantity": p.get("quantity"),
+                "average_buy_price": p.get("average_buy_price")
+            })
+        except Exception:
+            pass
+    return result
 
-def get_quote(token, symbol):
+def get_quote(symbol):
     """Get current quote for a symbol."""
-    r = requests.get(
-        f"{RH_BASE}/quotes/{symbol}/",
-        headers=rh_headers(token)
-    )
-    r.raise_for_status()
-    return r.json()
+    quote = rh.get_latest_price(symbol)
+    if quote and len(quote) > 0:
+        return float(quote[0])
+    return 0.0
 
-def place_order(token, symbol, side, quantity, price):
+def place_order(symbol, side, quantity, price):
     """Place a market order."""
-    payload = {
-        "account": f"{RH_BASE}/accounts/{ACCOUNT_NUMBER}/",
-        "instrument": f"{RH_BASE}/instruments/?symbol={symbol}",
-        "symbol": symbol,
-        "side": side,          # "buy" or "sell"
-        "quantity": quantity,
-        "type": "market",
-        "time_in_force": "gfd",  # good for day
-        "trigger": "immediate",
-        "price": price,
-    }
-    r = requests.post(
-        f"{RH_BASE}/orders/",
-        json=payload,
-        headers=rh_headers(token)
-    )
-    r.raise_for_status()
-    return r.json()
+    if side == "buy":
+        order = rh.order_buy_market(
+            symbol=symbol,
+            quantity=quantity,
+            account_number=ACCOUNT_NUMBER,
+            timeInForce="gfd"
+        )
+    else:
+        order = rh.order_sell_market(
+            symbol=symbol,
+            quantity=quantity,
+            account_number=ACCOUNT_NUMBER,
+            timeInForce="gfd"
+        )
+    return order
 
 # ── Pushover notifications ───────────────────────────────────────────────────
 def send_notification(title, message, priority=0):
     """Send a push notification via Pushover."""
     requests.post("https://api.pushover.net/1/messages.json", data={
-        "token":   PUSHOVER_APP_TOKEN,
-        "user":    PUSHOVER_USER_KEY,
-        "title":   title,
-        "message": message,
-        "priority": priority,  # 1 = high priority, requires acknowledgment
+        "token":    PUSHOVER_APP_TOKEN,
+        "user":     PUSHOVER_USER_KEY,
+        "title":    title,
+        "message":  message,
+        "priority": priority,
     })
 
 def send_approval_request(trade, trade_id):
-    """
-    Send a high-priority Pushover notification asking for trade approval.
-    User must reply via the approval endpoint or the web dashboard.
-    """
     msg = (
         f"🤖 Trade Recommendation #{trade_id}\n\n"
         f"Action: {trade['side'].upper()} {trade['symbol']}\n"
         f"Quantity: {trade['quantity']} shares\n"
         f"Est. Value: ${trade['estimated_value']:.2f}\n"
         f"Reason: {trade['reason']}\n\n"
-        f"Reply APPROVE or DENY via the bot dashboard.\n"
+        f"Open your dashboard to Approve or Deny.\n"
         f"Auto-expires in {APPROVAL_TIMEOUT // 60} minutes."
     )
     send_notification("⚡ Trade Approval Needed", msg, priority=1)
 
+# ── Approval state ───────────────────────────────────────────────────────────
+APPROVALS_FILE = "/tmp/pending_approvals.json"
+
+def save_pending(trade_id, trade):
+    try:
+        with open(APPROVALS_FILE, "r") as f:
+            pending = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pending = {}
+    pending[str(trade_id)] = {**trade, "timestamp": time.time()}
+    with open(APPROVALS_FILE, "w") as f:
+        json.dump(pending, f)
+
+def get_approval_status(trade_id):
+    try:
+        with open(APPROVALS_FILE, "r") as f:
+            pending = json.load(f)
+        trade = pending.get(str(trade_id), {})
+        return trade.get("status", "pending")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return "pending"
+
+def wait_for_approval(trade_id):
+    start = time.time()
+    while time.time() - start < APPROVAL_TIMEOUT:
+        status = get_approval_status(trade_id)
+        if status == "approved":
+            return True
+        if status == "denied":
+            return False
+        time.sleep(30)
+    send_notification("⏰ Trade Expired", f"Trade #{trade_id} approval timed out and was not executed.")
+    return False
+
 # ── Claude AI analysis ───────────────────────────────────────────────────────
 def get_claude_recommendation(portfolio_value, buying_power, positions, scan_type):
-    """Ask Claude to analyze current state and recommend trades."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    max_trade_value = portfolio_value * 0.20  # 20% rule
+    max_trade_value = portfolio_value * 0.20
 
     system_prompt = """You are an aggressive but smart trading assistant managing a small cash account.
 Your job is to recommend specific trades based on current market conditions.
@@ -179,11 +199,9 @@ Aggressive but risk-managed strategy."""
         messages=[{"role": "user", "content": user_prompt}]
     )
 
-    # Extract text content from response
     for block in response.content:
         if block.type == "text":
             try:
-                # Strip any markdown code fences
                 text = block.text.strip().replace("```json", "").replace("```", "").strip()
                 return json.loads(text)
             except json.JSONDecodeError:
@@ -191,72 +209,32 @@ Aggressive but risk-managed strategy."""
 
     return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
 
-# ── Approval state (simple file-based for Railway) ──────────────────────────
-APPROVALS_FILE = "/tmp/pending_approvals.json"
-
-def save_pending(trade_id, trade):
-    try:
-        with open(APPROVALS_FILE, "r") as f:
-            pending = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        pending = {}
-    pending[str(trade_id)] = {**trade, "timestamp": time.time()}
-    with open(APPROVALS_FILE, "w") as f:
-        json.dump(pending, f)
-
-def get_approval_status(trade_id):
-    """Check if a trade has been approved or denied. Returns 'pending', 'approved', or 'denied'."""
-    try:
-        with open(APPROVALS_FILE, "r") as f:
-            pending = json.load(f)
-        trade = pending.get(str(trade_id), {})
-        return trade.get("status", "pending")
-    except (FileNotFoundError, json.JSONDecodeError):
-        return "pending"
-
-def wait_for_approval(trade_id):
-    """Poll for approval status until timeout."""
-    start = time.time()
-    while time.time() - start < APPROVAL_TIMEOUT:
-        status = get_approval_status(trade_id)
-        if status == "approved":
-            return True
-        if status == "denied":
-            return False
-        time.sleep(30)  # check every 30 seconds
-    # Timed out — treat as denied
-    send_notification("⏰ Trade Expired", f"Trade #{trade_id} approval timed out and was not executed.")
-    return False
-
 # ── Main scan logic ──────────────────────────────────────────────────────────
-def run_scan(scan_type="market_open"):
-    """Run a full scan cycle: analyze → notify → wait for approval → execute."""
+def run_scan(scan_type="manual"):
     print(f"\n{'='*50}")
     print(f"Running {scan_type} scan at {datetime.now()}")
     print('='*50)
 
     try:
-        # 1. Login to Robinhood
-        token = rh_login()
+        # 1. Login
+        rh_login()
         print("✅ Robinhood login successful")
 
         # 2. Get portfolio state
-        portfolio = get_portfolio(token)
-        portfolio_value = float(portfolio.get("equity", 500))
-        buying_power = float(portfolio.get("withdrawable_amount", 0))
-        positions = get_positions(token)
+        portfolio_value, buying_power = get_portfolio()
+        positions = get_positions()
 
         print(f"💰 Portfolio: ${portfolio_value:.2f} | Buying Power: ${buying_power:.2f}")
         print(f"📊 Open positions: {len(positions)}")
 
-        # 3. Ask Claude for recommendations
+        # 3. Ask Claude
         send_notification("🔍 Scanning Market", f"{scan_type.replace('_', ' ').title()} scan in progress...")
         recs = get_claude_recommendation(portfolio_value, buying_power, positions, scan_type)
 
         print(f"🤖 Market summary: {recs.get('market_summary', 'N/A')}")
         print(f"📋 Recommendations: {len(recs.get('recommendations', []))}")
 
-        # 4. No recommendations? Notify and exit
+        # 4. No recommendations
         if not recs.get("recommendations"):
             send_notification(
                 "📊 Scan Complete — No Trades",
@@ -271,26 +249,19 @@ def run_scan(scan_type="market_open"):
             allocation_pct = rec["allocation_pct"]
             reason = rec["reason"]
 
-            # Calculate quantity
             trade_value = portfolio_value * (allocation_pct / 100)
             trade_value = min(trade_value, portfolio_value * 0.20)  # hard 20% cap
 
             if side == "buy" and trade_value > buying_power:
-                send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power (${buying_power:.2f} available)")
+                send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power")
                 continue
 
-            # Get current price
-            try:
-                quote = get_quote(token, symbol)
-                price = float(quote.get("last_trade_price") or quote.get("last_extended_hours_trade_price", 0))
-            except Exception:
-                price = 0
-
+            price = get_quote(symbol)
             if price <= 0:
                 print(f"⚠️ Could not get price for {symbol}, skipping")
                 continue
 
-            quantity = round(trade_value / price, 6)  # fractional shares
+            quantity = round(trade_value / price, 6)
 
             trade = {
                 "symbol": symbol,
@@ -305,18 +276,14 @@ def run_scan(scan_type="market_open"):
 
             trade_id = f"{int(time.time())}_{i}"
             save_pending(trade_id, trade)
-
-            # 6. Send approval notification
             send_approval_request(trade, trade_id)
             print(f"📱 Approval request sent for {side} {symbol}")
 
-            # 7. Wait for approval
             approved = wait_for_approval(trade_id)
 
             if approved:
-                # 8. Execute the trade
                 try:
-                    order = place_order(token, symbol, side, quantity, price)
+                    order = place_order(symbol, side, quantity, price)
                     send_notification(
                         "✅ Trade Executed",
                         f"{side.upper()} {quantity:.4f} {symbol} @ ~${price:.2f}\nOrder ID: {order.get('id', 'N/A')}"
@@ -334,8 +301,7 @@ def run_scan(scan_type="market_open"):
         print(f"❌ Scan error: {e}")
         raise
 
-
-# ── Entry point (called by scheduler.py) ────────────────────────────────────
+# ── Entry point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import sys
     scan_type = sys.argv[1] if len(sys.argv) > 1 else "manual"

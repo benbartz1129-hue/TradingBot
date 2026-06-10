@@ -200,28 +200,21 @@ Aggressive but risk-managed strategy."""
         messages=[{"role": "user", "content": user_prompt}]
     )
 
-    # Debug: print raw response to logs
-    print("🔍 Raw Claude response:")
+    # Combine ALL text blocks into one string
+    full_text = ""
     for block in response.content:
-        print(f"  Block type: {block.type}")
         if block.type == "text":
-            print(f"  Text: {block.text[:500]}")
+            full_text += block.text
 
-    import re
-    for block in response.content:
-        if block.type == "text":
-            text = block.text.strip()
-            try:
-                text_clean = text.replace("```json", "").replace("```", "").strip()
-                return json.loads(text_clean)
-            except json.JSONDecodeError:
-                pass
-            try:
-                match = re.search(r'\{.*\}', text, re.DOTALL)
-                if match:
-                    return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+    print(f"🔍 Combined response length: {len(full_text)} chars")
+
+    # Try to extract JSON from the combined text
+    try:
+        match = re.search(r'\{.*\}', full_text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parse error: {e}")
 
     return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
 

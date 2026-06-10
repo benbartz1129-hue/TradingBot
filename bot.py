@@ -244,7 +244,10 @@ def run_scan(scan_type="manual"):
         # 3. Ask Claude
         send_notification("🔍 Scanning Market", f"{scan_type.replace('_', ' ').title()} scan in progress...")
         recs = get_claude_recommendation(portfolio_value, buying_power, positions, scan_type)
-
+        recs = get_claude_recommendation(portfolio_value, buying_power, positions, scan_type)
+        if recs is None:
+            recs = {"recommendations": [], "market_summary": "No response", "notes": ""}
+        
         print(f"🤖 Market summary: {recs.get('market_summary', 'N/A')}")
         print(f"📋 Recommendations: {len(recs.get('recommendations', []))}")
 

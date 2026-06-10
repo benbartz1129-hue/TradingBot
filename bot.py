@@ -212,11 +212,14 @@ Aggressive but risk-managed strategy."""
     try:
         match = re.search(r'\{.*\}', full_text, re.DOTALL)
         if match:
+            print(f"🔍 Found JSON block: {match.group()[:300]}")
             return json.loads(match.group())
+        else:
+            print(f"🔍 No JSON found. Full text: {full_text[:500]}")
     except json.JSONDecodeError as e:
         print(f"❌ JSON parse error: {e}")
-
-    return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
+        if match:
+            print(f"🔍 Failed JSON: {match.group()[:500]}")
 
 
 # ── Main scan logic ──────────────────────────────────────────────────────────

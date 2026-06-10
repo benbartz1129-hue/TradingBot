@@ -148,33 +148,28 @@ def get_claude_recommendation(portfolio_value, buying_power, positions, scan_typ
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     max_trade_value = portfolio_value * 0.20
 
-    system_prompt = """You are an aggressive but smart trading assistant managing a small cash account.
-Your job is to recommend specific trades based on current market conditions.
+    system_prompt = """You are a trading assistant. Respond ONLY with a valid JSON object — no intro text, no markdown, no explanation before or after. Just the raw JSON.
 
-STRICT RULES you must never break:
+STRICT RULES:
 - No margin trading ever
 - No single trade > 20% of total account value
 - Cash account only
-- Always provide a clear reason for each trade
 
-Respond ONLY with a JSON object in this exact format:
+JSON format (respond with ONLY this, nothing else):
 {
   "market_summary": "Brief 1-2 sentence market overview",
   "recommendations": [
     {
       "symbol": "TICKER",
-      "side": "buy" or "sell",
-      "allocation_pct": 10,
-      "reason": "Why this trade makes sense right now",
-      "asset_type": "stock" or "crypto" or "etf"
+      "side": "buy",
+      "allocation_pct": 15,
+      "reason": "Why this trade makes sense",
+      "asset_type": "stock"
     }
   ],
-  "hold_current": true or false,
-  "notes": "Any other relevant notes"
-}
-
-If there are no good opportunities, return an empty recommendations array.
-Keep allocations to 10-20% per trade maximum."""
+  "hold_current": true,
+  "notes": "Any notes"
+}"""
 
     positions_str = json.dumps(positions, indent=2) if positions else "No open positions"
 
@@ -187,40 +182,46 @@ Max Per Trade: ${max_trade_value:.2f}
 Current Positions:
 {positions_str}
 
-Analyze current market conditions and recommend specific trades.
-Use web search to check current prices and market sentiment.
-Focus on momentum, news catalysts, and technical setups.
-Aggressive but risk-managed strategy."""
+Search for current market conditions and recommend trades. Return ONLY the JSON object, no other text."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}]
-    )
-
-    # Combine ALL text blocks into one string
-    full_text = ""
-    for block in response.content:
-        if block.type == "text":
-            full_text += block.text
-
-    print(f"🔍 Combined response length: {len(full_text)} chars")
-
-    # Try to extract JSON from the combined text
     try:
-        match = re.search(r'\{.*\}', full_text, re.DOTALL)
-        if match:
-            print(f"🔍 Found JSON block: {match.group()[:300]}")
-            return json.loads(match.group())
-        else:
-            print(f"🔍 No JSON found. Full text: {full_text[:500]}")
-    except json.JSONDecodeError as e:
-        print(f"❌ JSON parse error: {e}")
-        if match:
-            print(f"🔍 Failed JSON: {match.group()[:500]}")
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
 
+        # Combine all text blocks
+        full_text = ""
+        for block in response.content:
+            if block.type == "text":
+                full_text += block.text
+
+        print(f"🔍 Response length: {len(full_text)} chars")
+
+        # Try direct parse
+        try:
+            clean = full_text.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            pass
+
+        # Try extracting JSON object
+        match = re.search(r'\{[^{}]*"market_summary".*\}', full_text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        print(f"❌ Could not parse JSON. Text preview: {full_text[:200]}")
+        return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
+
+    except Exception as e:
+        print(f"❌ Claude API error: {e}")
+        return {"recommendations": [], "market_summary": f"API error: {str(e)}", "notes": ""}
 
 # ── Main scan logic ──────────────────────────────────────────────────────────
 def run_scan(scan_type="manual"):

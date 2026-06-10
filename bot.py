@@ -27,13 +27,14 @@ ACCOUNT_NUMBER      = os.environ["RH_ACCOUNT_NUMBER"]
 
 # ── Robinhood helpers (via robin_stocks) ─────────────────────────────────────
 def rh_login():
-    """Login to Robinhood using robin_stocks."""
+    """Login to Robinhood, reusing stored session if available."""
     login = rh.login(
         username=ROBINHOOD_USERNAME,
         password=ROBINHOOD_PASSWORD,
-        expiresIn=86400,
+        expiresIn=86400 * 7,
         store_session=True,
-        mfa_code=None
+        mfa_code=None,
+        device_token=os.environ.get("RH_DEVICE_TOKEN", "a7g3k9m2-b4c8-4d2e-8f1a-3b5c7d9e1f2a")
     )
     return login
 

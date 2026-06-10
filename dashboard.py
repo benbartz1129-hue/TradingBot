@@ -10,19 +10,21 @@ import os
 import time
 
 app = Flask(__name__)
-APPROVALS_FILE = "/tmp/pending_approvals.json"
+import redis
+redis_client = redis.from_url(os.environ["REDIS_URL"])
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 
 def load_pending():
-    try:
-        with open(APPROVALS_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    trades = {}
+    for key in redis_client.scan_iter("trade:*"):
+        trade_id = key.decode().replace("trade:", "")
+        data = redis_client.get(key)
+        if data:
+            trades[trade_id] = json.loads(data)
+    return trades
 
-def save_pending(data):
-    with open(APPROVALS_FILE, "w") as f:
-        json.dump(data, f)
+def save_pending(trade_id, trade):
+    redis_client.setex(f"trade:{trade_id}", 86400, json.dumps(trade))
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -158,8 +160,9 @@ def decide():
 
     pending = load_pending()
     if trade_id in pending:
-        pending[trade_id]["status"] = decision
-        save_pending(pending)
+        trade = json.loads(redis_client.get(f"trade:{trade_id}"))
+        trade["status"] = decision
+        redis_client.setex(f"trade:{trade_id}", 86400, json.dumps(trade))
         return jsonify({"ok": True})
     return jsonify({"error": "trade not found"}), 404
 

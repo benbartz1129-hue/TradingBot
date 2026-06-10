@@ -33,8 +33,7 @@ def rh_login():
         password=ROBINHOOD_PASSWORD,
         expiresIn=86400 * 7,
         store_session=True,
-        mfa_code=None,
-        device_token=os.environ.get("RH_DEVICE_TOKEN", "a7g3k9m2-b4c8-4d2e-8f1a-3b5c7d9e1f2a")
+        mfa_code=None
     )
     return login
 

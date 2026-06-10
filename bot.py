@@ -110,26 +110,18 @@ def send_approval_request(trade, trade_id):
     send_notification("⚡ Trade Approval Needed", msg, priority=1)
 
 # ── Approval state ───────────────────────────────────────────────────────────
-APPROVALS_FILE = "/tmp/pending_approvals.json"
+import redis
+redis_client = redis.from_url(os.environ["REDIS_URL"])
 
 def save_pending(trade_id, trade):
-    try:
-        with open(APPROVALS_FILE, "r") as f:
-            pending = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        pending = {}
-    pending[str(trade_id)] = {**trade, "timestamp": time.time()}
-    with open(APPROVALS_FILE, "w") as f:
-        json.dump(pending, f)
+    data = {**trade, "timestamp": time.time()}
+    redis_client.setex(f"trade:{trade_id}", 86400, json.dumps(data))
 
 def get_approval_status(trade_id):
-    try:
-        with open(APPROVALS_FILE, "r") as f:
-            pending = json.load(f)
-        trade = pending.get(str(trade_id), {})
-        return trade.get("status", "pending")
-    except (FileNotFoundError, json.JSONDecodeError):
-        return "pending"
+    data = redis_client.get(f"trade:{trade_id}")
+    if data:
+        return json.loads(data).get("status", "pending")
+    return "pending"
 
 def wait_for_approval(trade_id):
     start = time.time()

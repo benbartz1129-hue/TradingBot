@@ -199,11 +199,19 @@ Aggressive but risk-managed strategy."""
         messages=[{"role": "user", "content": user_prompt}]
     )
 
+   import re
     for block in response.content:
         if block.type == "text":
+            text = block.text.strip()
             try:
-                text = block.text.strip().replace("```json", "").replace("```", "").strip()
-                return json.loads(text)
+                text_clean = text.replace("```json", "").replace("```", "").strip()
+                return json.loads(text_clean)
+            except json.JSONDecodeError:
+                pass
+            try:
+                match = re.search(r'\{.*\}', text, re.DOTALL)
+                if match:
+                    return json.loads(match.group())
             except json.JSONDecodeError:
                 pass
 

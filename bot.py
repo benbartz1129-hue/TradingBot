@@ -200,6 +200,14 @@ Aggressive but risk-managed strategy."""
         messages=[{"role": "user", "content": user_prompt}]
     )
 
+    # Debug: print raw response to logs
+    print("🔍 Raw Claude response:")
+    for block in response.content:
+        print(f"  Block type: {block.type}")
+        if block.type == "text":
+            print(f"  Text: {block.text[:500]}")
+
+    import re
     for block in response.content:
         if block.type == "text":
             text = block.text.strip()
@@ -216,6 +224,7 @@ Aggressive but risk-managed strategy."""
                 pass
 
     return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
+
 
 # ── Main scan logic ──────────────────────────────────────────────────────────
 def run_scan(scan_type="manual"):

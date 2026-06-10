@@ -9,6 +9,7 @@ Robinhood AI Trading Bot
 import os
 import json
 import time
+import re
 import requests
 import anthropic
 import robin_stocks.robinhood as rh
@@ -199,7 +200,6 @@ Aggressive but risk-managed strategy."""
         messages=[{"role": "user", "content": user_prompt}]
     )
 
-   import re
     for block in response.content:
         if block.type == "text":
             text = block.text.strip()

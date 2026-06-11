@@ -140,41 +140,41 @@ def get_claude_recommendation(portfolio_value, buying_power, positions, scan_typ
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     max_trade_value = portfolio_value * 0.20
 
-    system_prompt = """You are a trading assistant. Respond ONLY with a valid JSON object — no intro text, no markdown, no explanation before or after. Just the raw JSON.
+    system_prompt = """You are a trading assistant. You MUST respond with ONLY a valid JSON object. 
+No text before it. No text after it. No markdown. No explanation. Just the raw JSON object starting with { and ending with }.
 
-STRICT RULES:
-- No margin trading ever
-- No single trade > 20% of total account value
-- Cash account only
-
-JSON format (respond with ONLY this, nothing else):
+JSON format:
 {
-  "market_summary": "Brief 1-2 sentence market overview",
+  "market_summary": "string",
   "recommendations": [
     {
       "symbol": "TICKER",
       "side": "buy",
       "allocation_pct": 15,
-      "reason": "Why this trade makes sense",
+      "reason": "string",
       "asset_type": "stock"
     }
   ],
   "hold_current": true,
-  "notes": "Any notes"
-}"""
+  "notes": "string"
+}
+
+RULES:
+- No margin trading
+- Max 20% per trade
+- Cash account only
+- Empty recommendations array if no good opportunities"""
 
     positions_str = json.dumps(positions, indent=2) if positions else "No open positions"
 
-    user_prompt = f"""Current {scan_type} scan - {datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %H:%M ET')}
-
-Portfolio Value: ${portfolio_value:.2f}
+    user_prompt = f"""Scan type: {scan_type}
+Time: {datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %H:%M ET')}
+Portfolio: ${portfolio_value:.2f}
 Buying Power: ${buying_power:.2f}
 Max Per Trade: ${max_trade_value:.2f}
+Positions: {positions_str}
 
-Current Positions:
-{positions_str}
-
-Search for current market conditions and recommend trades. Return ONLY the JSON object, no other text."""
+Search current market conditions and return ONLY the JSON object."""
 
     try:
         response = client.messages.create(
@@ -193,28 +193,35 @@ Search for current market conditions and recommend trades. Return ONLY the JSON 
 
         print(f"🔍 Response length: {len(full_text)} chars")
 
-        # Try direct parse
+        # Try 1: direct parse after stripping markdown
         try:
             clean = full_text.strip().replace("```json", "").replace("```", "").strip()
             return json.loads(clean)
         except json.JSONDecodeError:
             pass
 
-        # Try extracting JSON object
-        match = re.search(r'\{[^{}]*"market_summary".*\}', full_text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+        # Try 2: find first { to last }
+        try:
+            start = full_text.index("{")
+            end = full_text.rindex("}") + 1
+            return json.loads(full_text[start:end])
+        except (ValueError, json.JSONDecodeError):
+            pass
 
-        print(f"❌ Could not parse JSON. Text preview: {full_text[:200]}")
+        # Try 3: regex
+        try:
+            match = re.search(r'\{.*\}', full_text, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+        print(f"❌ All parse attempts failed. Preview: {full_text[:300]}")
         return {"recommendations": [], "market_summary": "Unable to parse response", "notes": ""}
 
     except Exception as e:
         print(f"❌ Claude API error: {e}")
         return {"recommendations": [], "market_summary": f"API error: {str(e)}", "notes": ""}
-
 # ── Main scan logic ──────────────────────────────────────────────────────────
 def run_scan(scan_type="manual"):
     print(f"\n{'='*50}")

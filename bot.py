@@ -26,8 +26,29 @@ APPROVAL_TIMEOUT    = int(os.environ.get("APPROVAL_TIMEOUT", "1800"))  # 30 min 
 ACCOUNT_NUMBER      = os.environ["RH_ACCOUNT_NUMBER"]
 
 # ── Robinhood helpers (via robin_stocks) ─────────────────────────────────────
+SESSION_FILE = "/tmp/rh_session.pkl"
+
 def rh_login():
-    """Login to Robinhood, reusing stored session if available."""
+    """Login to Robinhood, reusing pickled session if still valid."""
+    import pickle
+    import os
+
+    # Try to reuse existing session first
+    if os.path.exists(SESSION_FILE):
+        try:
+            with open(SESSION_FILE, "rb") as f:
+                session_data = pickle.load(f)
+            # Check if session is less than 6 days old
+            if time.time() - session_data["timestamp"] < 86400 * 6:
+                rh.authentication.ACCESS_TOKEN = session_data["access_token"]
+                rh.authentication.REFRESH_TOKEN = session_data["refresh_token"]
+                print("✅ Reusing existing Robinhood session")
+                return
+        except Exception as e:
+            print(f"⚠️ Could not reuse session: {e}")
+
+    # Full login if no valid session
+    print("🔐 Performing full Robinhood login...")
     login = rh.login(
         username=ROBINHOOD_USERNAME,
         password=ROBINHOOD_PASSWORD,
@@ -35,7 +56,19 @@ def rh_login():
         store_session=True,
         mfa_code=None
     )
-    return login
+
+    # Save session tokens for reuse
+    try:
+        session_data = {
+            "access_token": rh.authentication.ACCESS_TOKEN,
+            "refresh_token": rh.authentication.REFRESH_TOKEN,
+            "timestamp": time.time()
+        }
+        with open(SESSION_FILE, "wb") as f:
+            pickle.dump(session_data, f)
+        print("💾 Session saved for reuse")
+    except Exception as e:
+        print(f"⚠️ Could not save session: {e}")
 
 def get_portfolio():
     """Get account portfolio value and buying power."""

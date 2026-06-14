@@ -429,4 +429,7 @@ def run_scan(scan_type="manual"):
 if __name__ == "__main__":
     import sys
     scan_type = sys.argv[1] if len(sys.argv) > 1 else "manual"
-    run_scan(scan_type)
+    if scan_type == "monitor":
+        monitor_positions()
+    else:
+        run_scan(scan_type)

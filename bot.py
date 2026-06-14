@@ -70,6 +70,65 @@ def rh_login():
     except Exception as e:
         print(f"⚠️ Could not save session: {e}")
 
+def monitor_positions():
+    """Check open positions every 15 mins and alert if significant movement."""
+    try:
+        rh_login()
+        positions = get_positions()
+
+        if not positions:
+            print("📊 No open positions to monitor")
+            return
+
+        for position in positions:
+            symbol = position["symbol"]
+            avg_buy_price = float(position["average_buy_price"])
+            quantity = float(position["quantity"])
+            current_price = get_quote(symbol)
+
+            if current_price <= 0 or avg_buy_price <= 0:
+                continue
+
+            pct_change = ((current_price - avg_buy_price) / avg_buy_price) * 100
+            current_value = current_price * quantity
+            profit_loss = (current_price - avg_buy_price) * quantity
+
+            print(f"📈 {symbol}: ${avg_buy_price:.2f} → ${current_price:.2f} ({pct_change:+.1f}%) P&L: ${profit_loss:+.2f}")
+
+            # Alert if down more than 10%
+            if pct_change <= -10:
+                send_notification(
+                    f"🔴 STOP LOSS ALERT — {symbol}",
+                    f"{symbol} is down {abs(pct_change):.1f}% from your buy price\n"
+                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                    f"P&L: ${profit_loss:+.2f}\n\n"
+                    f"Open dashboard to consider selling.",
+                    priority=1
+                )
+
+            # Alert if up more than 15%
+            elif pct_change >= 15:
+                send_notification(
+                    f"🟢 TAKE PROFIT ALERT — {symbol}",
+                    f"{symbol} is up {pct_change:.1f}% from your buy price\n"
+                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                    f"P&L: ${profit_loss:+.2f}\n\n"
+                    f"Open dashboard to consider taking profits.",
+                    priority=1
+                )
+
+            # Gentle nudge if up 7-14%
+            elif pct_change >= 7:
+                send_notification(
+                    f"📈 {symbol} up {pct_change:.1f}%",
+                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                    f"P&L: ${profit_loss:+.2f}",
+                    priority=0
+                )
+
+    except Exception as e:
+        print(f"❌ Monitor error: {e}")
+
 def get_portfolio():
     """Get account portfolio value and buying power."""
     profile = rh.profiles.load_account_profile(account_number=ACCOUNT_NUMBER)

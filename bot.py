@@ -57,11 +57,12 @@ def rh_login():
         mfa_code=None
     )
 
-    # Save session tokens for reuse
+   # Save session tokens for reuse
     try:
+        token_data = rh.authentication.get_cached_token_data()
         session_data = {
-            "access_token": rh.authentication.ACCESS_TOKEN,
-            "refresh_token": rh.authentication.REFRESH_TOKEN,
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token"),
             "timestamp": time.time()
         }
         with open(SESSION_FILE, "wb") as f:

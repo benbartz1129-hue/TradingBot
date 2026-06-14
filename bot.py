@@ -69,7 +69,7 @@ def get_quote(symbol):
     return 0.0
 
 def place_order(symbol, side, quantity, price):
-    """Place a market order."""
+    print(f"📤 Placing order: {side} {quantity} {symbol}")
     if side == "buy":
         order = rh.order_buy_market(
             symbol=symbol,
@@ -84,8 +84,11 @@ def place_order(symbol, side, quantity, price):
             account_number=ACCOUNT_NUMBER,
             timeInForce="gfd"
         )
+    print(f"📥 Order response: {json.dumps(order, indent=2)}")
+    if not order or order.get("detail") or not order.get("id"):
+        raise Exception(f"Order rejected: {order}")
     return order
-
+    
 # ── Pushover notifications ───────────────────────────────────────────────────
 def send_notification(title, message, priority=0):
     """Send a push notification via Pushover."""

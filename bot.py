@@ -29,26 +29,7 @@ ACCOUNT_NUMBER      = os.environ["RH_ACCOUNT_NUMBER"]
 SESSION_FILE = "/tmp/rh_session.pkl"
 
 def rh_login():
-    """Login to Robinhood, reusing pickled session if still valid."""
-    import pickle
-    import os
-
-    # Try to reuse existing session first
-    if os.path.exists(SESSION_FILE):
-        try:
-            with open(SESSION_FILE, "rb") as f:
-                session_data = pickle.load(f)
-            # Check if session is less than 6 days old
-            if time.time() - session_data["timestamp"] < 86400 * 6:
-                rh.authentication.ACCESS_TOKEN = session_data["access_token"]
-                rh.authentication.REFRESH_TOKEN = session_data["refresh_token"]
-                print("✅ Reusing existing Robinhood session")
-                return
-        except Exception as e:
-            print(f"⚠️ Could not reuse session: {e}")
-
-    # Full login if no valid session
-    print("🔐 Performing full Robinhood login...")
+    """Login to Robinhood."""
     login = rh.login(
         username=ROBINHOOD_USERNAME,
         password=ROBINHOOD_PASSWORD,
@@ -56,20 +37,7 @@ def rh_login():
         store_session=True,
         mfa_code=None
     )
-
-   # Save session tokens for reuse
-    try:
-        token_data = rh.authentication.get_cached_token_data()
-        session_data = {
-            "access_token": token_data.get("access_token"),
-            "refresh_token": token_data.get("refresh_token"),
-            "timestamp": time.time()
-        }
-        with open(SESSION_FILE, "wb") as f:
-            pickle.dump(session_data, f)
-        print("💾 Session saved for reuse")
-    except Exception as e:
-        print(f"⚠️ Could not save session: {e}")
+    return login
 
 def monitor_positions():
     """Check open positions every 15 mins and alert if significant movement."""

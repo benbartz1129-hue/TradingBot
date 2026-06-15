@@ -409,6 +409,11 @@ def run_scan(scan_type="manual"):
             allocation_pct = rec["allocation_pct"]
             reason         = rec["reason"]
 
+            # Skip hold recommendations — no action needed
+            if side.lower() not in ["buy", "sell"]:
+                print(f"⏭️  Skipping {side} recommendation for {symbol} — no action needed")
+                continue
+            
             trade_value = portfolio_value * (allocation_pct / 100)
             trade_value = min(trade_value, portfolio_value * 0.20)
 

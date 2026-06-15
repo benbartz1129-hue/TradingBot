@@ -256,6 +256,24 @@ def save_pending(trade_id, trade):
     data = {**trade, "timestamp": time.time()}
     redis_client.set(f"trade:{trade_id}", json.dumps(data), ex=86400)
 
+def save_trade_history(trade, trade_id, outcome, order_id=None):
+    """Save completed trade to history in Redis."""
+    history_entry = {
+        "trade_id": trade_id,
+        "symbol": trade["symbol"],
+        "side": trade["side"],
+        "quantity": trade.get("quantity", 0),
+        "price": trade.get("price", 0),
+        "estimated_value": trade.get("estimated_value", 0),
+        "reason": trade.get("reason", ""),
+        "asset_type": trade.get("asset_type", "stock"),
+        "outcome": outcome,  # "executed", "denied", "expired", "failed"
+        "order_id": order_id,
+        "timestamp": time.time(),
+        "date": datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %H:%M ET')
+    }
+    redis_client.set(f"history:{trade_id}", json.dumps(history_entry), ex=86400 * 30)  # keep 30 days
+
 def get_approval_status(trade_id):
     data = redis_client.get(f"trade:{trade_id}")
     if data:
@@ -466,7 +484,7 @@ def run_scan(scan_type="manual"):
                     asset_type = rec.get("asset_type", "stock")
                     option_data = rec.get("option")
 
-                    if asset_type == "option" and option_data:
+if asset_type == "option" and option_data:
                         order = place_option_order(
                             symbol=symbol,
                             option_type=option_data.get("type", "call"),
@@ -488,12 +506,17 @@ def run_scan(scan_type="manual"):
                             "✅ Trade Executed",
                             f"{side.upper()} {quantity:.4f} {symbol} @ ~${price:.2f}\nOrder ID: {order.get('id', 'N/A')}"
                         )
+                    save_trade_history(trade, trade_id, "executed", order.get("id"))
                     print(f"✅ Order placed: {side} {symbol}")
                 except Exception as e:
                     send_notification("❌ Trade Failed", f"{symbol}: {str(e)}")
+                    save_trade_history(trade, trade_id, "failed")
                     print(f"❌ Order failed: {e}")
             else:
+                status = get_approval_status(trade_id)
+                outcome = "denied" if status == "denied" else "expired"
                 send_notification("🚫 Trade Denied", f"{side.upper()} {symbol} was not executed.")
+                save_trade_history(trade, trade_id, outcome)
                 print(f"🚫 Trade denied or timed out: {symbol}")
 
     except Exception as e:

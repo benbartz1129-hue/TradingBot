@@ -484,7 +484,7 @@ def run_scan(scan_type="manual"):
                     asset_type = rec.get("asset_type", "stock")
                     option_data = rec.get("option")
 
-if asset_type == "option" and option_data:
+        if asset_type == "option" and option_data:
                         order = place_option_order(
                             symbol=symbol,
                             option_type=option_data.get("type", "call"),

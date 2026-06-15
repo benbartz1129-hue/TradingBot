@@ -479,12 +479,12 @@ def run_scan(scan_type="manual"):
 
             approved = wait_for_approval(trade_id)
 
-            if approved:
+if approved:
                 try:
                     asset_type = rec.get("asset_type", "stock")
                     option_data = rec.get("option")
 
-        if asset_type == "option" and option_data:
+                    if asset_type == "option" and option_data:
                         order = place_option_order(
                             symbol=symbol,
                             option_type=option_data.get("type", "call"),
@@ -518,7 +518,6 @@ def run_scan(scan_type="manual"):
                 send_notification("🚫 Trade Denied", f"{side.upper()} {symbol} was not executed.")
                 save_trade_history(trade, trade_id, outcome)
                 print(f"🚫 Trade denied or timed out: {symbol}")
-
     except Exception as e:
         send_notification("🚨 Bot Error", f"Scan failed: {str(e)}", priority=1)
         print(f"❌ Scan error: {e}")

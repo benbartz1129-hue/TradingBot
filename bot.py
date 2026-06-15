@@ -179,7 +179,7 @@ redis_client = redis.from_url(os.environ["REDIS_URL"])
 
 def save_pending(trade_id, trade):
     data = {**trade, "timestamp": time.time()}
-    redis_client.setex(f"trade:{trade_id}", 86400, json.dumps(data))
+    redis_client.set(f"trade:{trade_id}", json.dumps(data), ex=86400)
 
 def get_approval_status(trade_id):
     data = redis_client.get(f"trade:{trade_id}")

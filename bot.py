@@ -149,6 +149,66 @@ def place_order(symbol, side, quantity, price):
     if not order or order.get("detail") or not order.get("id"):
         raise Exception(f"Order rejected: {order}")
     return order
+
+def place_option_order(symbol, option_type, strike, expiry, contracts, side):
+    """Place an options order."""
+    try:
+        print(f"📤 Placing option order: {side} {contracts}x {symbol} {strike}{option_type[0].upper()} {expiry}")
+
+        # Find the option instrument
+        options = rh.find_options_by_expiration_and_strike(
+            inputSymbols=symbol,
+            expirationDate=expiry,
+            strikePrice=strike,
+            optionType=option_type,  # "call" or "put"
+            info=None
+        )
+
+        if not options or len(options) == 0:
+            raise Exception(f"No options found for {symbol} {strike} {option_type} {expiry}")
+
+        option = options[0]
+        option_id = option.get("id")
+
+        print(f"📋 Option found: {option.get('chain_symbol')} strike={option.get('strike_price')} exp={option.get('expiration_date')}")
+
+        if side == "buy":
+            order = rh.order_buy_option_limit(
+                positionEffect="open",
+                creditOrDebit="debit",
+                price=float(option.get("ask_price", 1.00)),
+                symbol=symbol,
+                quantity=contracts,
+                expirationDate=expiry,
+                strike=strike,
+                optionType=option_type,
+                timeInForce="gfd",
+                account_number=ACCOUNT_NUMBER
+            )
+        else:
+            order = rh.order_sell_option_limit(
+                positionEffect="close",
+                creditOrDebit="credit",
+                price=float(option.get("bid_price", 1.00)),
+                symbol=symbol,
+                quantity=contracts,
+                expirationDate=expiry,
+                strike=strike,
+                optionType=option_type,
+                timeInForce="gfd",
+                account_number=ACCOUNT_NUMBER
+            )
+
+        print(f"📥 Option order response: {json.dumps(order, indent=2)}")
+
+        if not order or not order.get("id"):
+            raise Exception(f"Option order rejected: {order}")
+
+        return order
+
+    except Exception as e:
+        print(f"❌ Option order error: {e}")
+        raise
     
 # ── Pushover notifications ───────────────────────────────────────────────────
 def send_notification(title, message, priority=0):
@@ -162,11 +222,26 @@ def send_notification(title, message, priority=0):
     })
 
 def send_approval_request(trade, trade_id):
+    option_data = trade.get("option")
+    if option_data:
+        trade_detail = (
+            f"Action: {trade['side'].upper()} OPTION on {trade['symbol']}\n"
+            f"Type: {option_data.get('type', 'call').upper()}\n"
+            f"Strike: ${option_data.get('strike')}\n"
+            f"Expiry: {option_data.get('expiry')}\n"
+            f"Contracts: {option_data.get('contracts', 1)}\n"
+            f"Est. Cost: ${trade['estimated_value']:.2f}\n"
+        )
+    else:
+        trade_detail = (
+            f"Action: {trade['side'].upper()} {trade['symbol']}\n"
+            f"Quantity: {trade['quantity']} shares\n"
+            f"Est. Value: ${trade['estimated_value']:.2f}\n"
+        )
+
     msg = (
         f"🤖 Trade Recommendation #{trade_id}\n\n"
-        f"Action: {trade['side'].upper()} {trade['symbol']}\n"
-        f"Quantity: {trade['quantity']} shares\n"
-        f"Est. Value: ${trade['estimated_value']:.2f}\n"
+        f"{trade_detail}"
         f"Reason: {trade['reason']}\n\n"
         f"Open your dashboard to Approve or Deny.\n"
         f"Auto-expires in {APPROVAL_TIMEOUT // 60} minutes."
@@ -217,6 +292,12 @@ STRATEGY:
 - ETFs for sector plays (ARKK, SOXL, TECL, QQQ options proxies)
 - Always have recommendations if market is open — no opportunities is rarely the right answer
 - Look for the day's biggest movers and identify if momentum will continue
+- Options are available — use them for high conviction directional plays
+- Buy CALLS for strong bullish momentum plays (1-2 week expiry, slightly OTM or ATM)
+- Buy PUTS for hedging existing positions or strong bearish plays
+- Keep options to max 10% allocation per trade — they're higher risk
+- Prefer weekly or bi-weekly expiries for short term plays
+- Include strike price and expiry in recommendations
 
 STRICT RULES (never break these):
 - No margin trading ever
@@ -233,9 +314,15 @@ JSON format:
     {
       "symbol": "TICKER",
       "side": "buy",
-      "allocation_pct": 15,
+      "allocation_pct": 10,
       "reason": "string",
-      "asset_type": "stock"
+      "asset_type": "stock",
+      "option": {
+        "type": "call",
+        "strike": 150.00,
+        "expiry": "2026-06-27",
+        "contracts": 1
+      }
     }
   ],
   "hold_current": true,
@@ -376,11 +463,31 @@ def run_scan(scan_type="manual"):
 
             if approved:
                 try:
-                    order = place_order(symbol, side, quantity, price)
-                    send_notification(
-                        "✅ Trade Executed",
-                        f"{side.upper()} {quantity:.4f} {symbol} @ ~${price:.2f}\nOrder ID: {order.get('id', 'N/A')}"
-                    )
+                    asset_type = rec.get("asset_type", "stock")
+                    option_data = rec.get("option")
+
+                    if asset_type == "option" and option_data:
+                        order = place_option_order(
+                            symbol=symbol,
+                            option_type=option_data.get("type", "call"),
+                            strike=option_data.get("strike"),
+                            expiry=option_data.get("expiry"),
+                            contracts=option_data.get("contracts", 1),
+                            side=side
+                        )
+                        send_notification(
+                            "✅ Option Executed",
+                            f"{side.upper()} {option_data.get('contracts', 1)}x {symbol} "
+                            f"{option_data.get('strike')}{option_data.get('type', 'call')[0].upper()} "
+                            f"exp {option_data.get('expiry')}\n"
+                            f"Order ID: {order.get('id', 'N/A')}"
+                        )
+                    else:
+                        order = place_order(symbol, side, quantity, price)
+                        send_notification(
+                            "✅ Trade Executed",
+                            f"{side.upper()} {quantity:.4f} {symbol} @ ~${price:.2f}\nOrder ID: {order.get('id', 'N/A')}"
+                        )
                     print(f"✅ Order placed: {side} {symbol}")
                 except Exception as e:
                     send_notification("❌ Trade Failed", f"{symbol}: {str(e)}")

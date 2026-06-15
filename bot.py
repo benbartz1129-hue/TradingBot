@@ -256,7 +256,7 @@ Search current market conditions and return ONLY the JSON object."""
     try:
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1000,
+            max_tokens=2000,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]

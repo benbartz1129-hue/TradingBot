@@ -239,6 +239,7 @@ STRICT RULES (never break these):
 - No single trade > 20% of total account value
 - Cash account only
 - Always provide a clear reason for each trade
+- NEVER include "hold" as a side value — only return "buy" or "sell" recommendations. If you recommend holding, omit that symbol entirely from the recommendations array.
 
 You MUST respond with ONLY a valid JSON object. No text before it. No text after it. No markdown. Just raw JSON starting with { and ending with }.
 

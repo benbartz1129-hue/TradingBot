@@ -346,33 +346,77 @@ def monitor_positions():
 
             print(f"📈 {symbol}: ${avg_buy_price:.2f} → ${current_price:.2f} ({pct_change:+.1f}%) P&L: ${profit_loss:+.2f}")
 
-            if pct_change <= -10:
-                send_notification(
-                    f"🔴 STOP LOSS ALERT — {symbol}",
-                    f"{symbol} is down {abs(pct_change):.1f}% from your buy price\n"
-                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
-                    f"P&L: ${profit_loss:+.2f}\n\nOpen dashboard to consider selling.",
-                    priority=1
-                )
+            # Determine which "tier" this position is currently in
+            if pct_change <= -20:
+                tier = "down_20"
+            elif pct_change <= -10:
+                tier = "down_10"
+            elif pct_change >= 25:
+                tier = "up_25"
             elif pct_change >= 15:
-                send_notification(
-                    f"🟢 TAKE PROFIT ALERT — {symbol}",
-                    f"{symbol} is up {pct_change:.1f}% from your buy price\n"
-                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
-                    f"P&L: ${profit_loss:+.2f}\n\nOpen dashboard to consider taking profits.",
-                    priority=1
-                )
+                tier = "up_15"
             elif pct_change >= 7:
-                send_notification(
-                    f"📈 {symbol} up {pct_change:.1f}%",
-                    f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
-                    f"P&L: ${profit_loss:+.2f}",
-                    priority=0
-                )
+                tier = "up_7"
+            else:
+                tier = "neutral"
+
+            # Check what tier we last alerted for this symbol
+            last_tier_key = f"alert_tier:{symbol}"
+            last_tier = redis_client.get(last_tier_key)
+            last_tier = last_tier.decode() if last_tier else None
+
+            # Only alert if we've moved to a NEW tier (different from last alert)
+            if tier != "neutral" and tier != last_tier:
+                if tier == "down_20":
+                    send_notification(
+                        f"🔴🔴 MAJOR LOSS — {symbol}",
+                        f"{symbol} is down {abs(pct_change):.1f}% from your buy price\n"
+                        f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                        f"P&L: ${profit_loss:+.2f}\n\nStrongly consider selling.",
+                        priority=1
+                    )
+                elif tier == "down_10":
+                    send_notification(
+                        f"🔴 STOP LOSS ALERT — {symbol}",
+                        f"{symbol} is down {abs(pct_change):.1f}% from your buy price\n"
+                        f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                        f"P&L: ${profit_loss:+.2f}\n\nOpen dashboard to consider selling.",
+                        priority=1
+                    )
+                elif tier == "up_25":
+                    send_notification(
+                        f"🟢🟢 BIG WIN — {symbol}",
+                        f"{symbol} is up {pct_change:.1f}% from your buy price!\n"
+                        f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                        f"P&L: ${profit_loss:+.2f}\n\nConsider locking in gains.",
+                        priority=1
+                    )
+                elif tier == "up_15":
+                    send_notification(
+                        f"🟢 TAKE PROFIT ALERT — {symbol}",
+                        f"{symbol} is up {pct_change:.1f}% from your buy price\n"
+                        f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                        f"P&L: ${profit_loss:+.2f}\n\nOpen dashboard to consider taking profits.",
+                        priority=1
+                    )
+                elif tier == "up_7":
+                    send_notification(
+                        f"📈 {symbol} up {pct_change:.1f}%",
+                        f"Bought @ ${avg_buy_price:.2f} | Now @ ${current_price:.2f}\n"
+                        f"P&L: ${profit_loss:+.2f}",
+                        priority=0
+                    )
+
+                # Remember this tier so we don't repeat the same alert
+                redis_client.set(last_tier_key, tier, ex=86400 * 2)
+
+            # If position returns to neutral, clear the tier so future moves re-trigger fresh
+            elif tier == "neutral" and last_tier is not None:
+                redis_client.delete(last_tier_key)
 
     except Exception as e:
         print(f"❌ Monitor error: {e}")
-
+        
 # ── Main scan ─────────────────────────────────────────────────────────────────
 def run_scan(scan_type="manual"):
     print(f"\n{'='*50}")

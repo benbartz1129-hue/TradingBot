@@ -67,7 +67,7 @@ DASHBOARD_HTML = """
   </style>
 </head>
 <body>
-  <h1>🤖 Trading Bot</h1>
+  <h1>🤖 Trading Bot v999</h1>
 
   {% if not authenticated %}
   <div class="login-card">

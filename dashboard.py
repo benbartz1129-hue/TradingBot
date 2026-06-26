@@ -207,7 +207,6 @@ def login():
 
 @app.route("/")
 def dashboard():
-    return "DEBUG MARKER 555 - IF YOU SEE THIS THE NEW CODE IS LIVE"
     auth_cookie = request.cookies.get("auth", "")
     authenticated = (auth_cookie == DASHBOARD_PASSWORD)
     tab = request.args.get("tab", "pending")

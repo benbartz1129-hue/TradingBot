@@ -592,14 +592,15 @@ def run_scan(scan_type="manual"):
                     asset_type  = rec.get("asset_type", "stock")
                     option_data = rec.get("option")
 
-                    if asset_type == "option" and option_data:
+                  if asset_type == "option" and option_data:
                         order = place_option_order(
                             symbol=symbol,
                             option_type=option_data.get("type", "call"),
                             strike=option_data.get("strike"),
                             expiry=option_data.get("expiry"),
                             contracts=option_data.get("contracts", 1),
-                            side=side
+                            side=side,
+                            max_cost=trade.get("estimated_value")
                         )
                         send_notification(
                             "✅ Option Executed",

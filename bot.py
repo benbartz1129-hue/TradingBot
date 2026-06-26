@@ -496,24 +496,78 @@ def run_scan(scan_type="manual"):
                 send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power")
                 continue
 
-            price = get_quote(symbol)
-            if price <= 0:
-                print(f"⚠️ Could not get price for {symbol}, skipping")
-                continue
+            asset_type  = rec.get("asset_type", "stock")
+            option_data = rec.get("option")
 
-            quantity = round(trade_value / price, 6)
+            if asset_type == "option" and option_data:
+                # ── Real options pricing & sizing ──────────────────────
+                option_type = option_data.get("type", "call")
+                strike      = option_data.get("strike")
+                expiry      = option_data.get("expiry")
+                contracts   = option_data.get("contracts", 1)
 
-            trade = {
-                "symbol":          symbol,
-                "side":            side,
-                "quantity":        quantity,
-                "price":           price,
-                "estimated_value": trade_value,
-                "reason":          reason,
-                "asset_type":      rec.get("asset_type", "stock"),
-                "option":          rec.get("option"),
-                "status":          "pending"
-            }
+                ask_price, option_info = get_option_quote(symbol, option_type, strike, expiry)
+
+                if ask_price <= 0:
+                    send_notification("⚠️ Skipped Option", f"{symbol} {strike}{option_type[0].upper()} {expiry}: Could not get a valid quote")
+                    continue
+
+                true_cost = contracts * ask_price * 100  # options are priced per share, 100 shares/contract
+                max_allowed = portfolio_value * 0.20
+
+                if true_cost > max_allowed:
+                    # Resize contracts down to fit the 20% cap, minimum 1
+                    max_contracts = int(max_allowed // (ask_price * 100))
+                    if max_contracts < 1:
+                        send_notification(
+                            "⚠️ Skipped Option",
+                            f"{symbol} {strike}{option_type[0].upper()} {expiry}: "
+                            f"Even 1 contract (${ask_price * 100:.2f}) exceeds 20% cap (${max_allowed:.2f})"
+                        )
+                        continue
+                    print(f"⚠️ Resizing {symbol} option from {contracts} to {max_contracts} contracts to fit 20% cap")
+                    contracts = max_contracts
+                    true_cost = contracts * ask_price * 100
+
+                # Update option_data with the resolved contracts and real price
+                option_data["contracts"] = contracts
+
+                trade = {
+                    "symbol":          symbol,
+                    "side":            side,
+                    "quantity":        contracts,
+                    "price":           ask_price,
+                    "estimated_value": true_cost,
+                    "reason":          reason,
+                    "asset_type":      "option",
+                    "option":          option_data,
+                    "status":          "pending"
+                }
+
+            else:
+                # ── Stock/ETF/crypto sizing (unchanged) ────────────────
+                price = get_quote(symbol)
+                if price <= 0:
+                    print(f"⚠️ Could not get price for {symbol}, skipping")
+                    continue
+
+                if side == "buy" and trade_value > buying_power:
+                    send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power")
+                    continue
+
+                quantity = round(trade_value / price, 6)
+
+                trade = {
+                    "symbol":          symbol,
+                    "side":            side,
+                    "quantity":        quantity,
+                    "price":           price,
+                    "estimated_value": trade_value,
+                    "reason":          reason,
+                    "asset_type":      asset_type,
+                    "option":          None,
+                    "status":          "pending"
+                }
 
             trade_id = f"{int(time.time())}_{i}"
             save_pending(trade_id, trade)

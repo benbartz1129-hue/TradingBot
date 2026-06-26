@@ -119,24 +119,30 @@ def place_order(symbol, side, quantity, price):
         raise Exception(f"Order rejected: {order}")
     return order
 
-def place_option_order(symbol, option_type, strike, expiry, contracts, side):
+def place_option_order(symbol, option_type, strike, expiry, contracts, side, max_cost=None):
+    """Place an options order, re-validating price hasn't moved beyond the approved cap."""
     print(f"📤 Placing option order: {side} {contracts}x {symbol} {strike}{option_type[0].upper()} {expiry}")
-    options = rh.find_options_by_expiration_and_strike(
-        inputSymbols=symbol,
-        expirationDate=expiry,
-        strikePrice=strike,
-        optionType=option_type,
-        info=None
-    )
-    if not options or len(options) == 0:
+
+    ask_price, option = get_option_quote(symbol, option_type, strike, expiry)
+
+    if option is None:
         raise Exception(f"No options found for {symbol} {strike} {option_type} {expiry}")
-    option = options[0]
+
     print(f"📋 Option found: {option.get('chain_symbol')} strike={option.get('strike_price')} exp={option.get('expiration_date')}")
+
     if side == "buy":
+        current_cost = contracts * ask_price * 100
+        # Re-check the cap at execution time too — price may have moved since approval
+        if max_cost and current_cost > max_cost * 1.15:  # allow 15% price drift, reject beyond that
+            raise Exception(
+                f"Price moved too much since approval: now ${current_cost:.2f} "
+                f"(was capped at ${max_cost:.2f}). Order not placed for safety."
+            )
+
         order = rh.order_buy_option_limit(
             positionEffect="open",
             creditOrDebit="debit",
-            price=float(option.get("ask_price", 1.00)),
+            price=ask_price,
             symbol=symbol,
             quantity=contracts,
             expirationDate=expiry,
@@ -146,10 +152,14 @@ def place_option_order(symbol, option_type, strike, expiry, contracts, side):
             account_number=ACCOUNT_NUMBER
         )
     else:
+        bid_price = float(option.get("bid_price") or 0)
+        if bid_price <= 0:
+            raise Exception(f"No valid bid price to sell {symbol} option")
+
         order = rh.order_sell_option_limit(
             positionEffect="close",
             creditOrDebit="credit",
-            price=float(option.get("bid_price", 1.00)),
+            price=bid_price,
             symbol=symbol,
             quantity=contracts,
             expirationDate=expiry,
@@ -158,6 +168,7 @@ def place_option_order(symbol, option_type, strike, expiry, contracts, side):
             timeInForce="gfd",
             account_number=ACCOUNT_NUMBER
         )
+
     print(f"📥 Option order response: {json.dumps(order, indent=2)}")
     if not order or not order.get("id"):
         raise Exception(f"Option order rejected: {order}")

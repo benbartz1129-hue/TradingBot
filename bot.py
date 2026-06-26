@@ -67,6 +67,36 @@ def get_quote(symbol):
         return float(quote[0])
     return 0.0
 
+def get_option_quote(symbol, option_type, strike, expiry):
+    """
+    Fetch the real ask price for a specific option contract.
+    Returns (ask_price, option_data) or (0, None) if not found.
+    """
+    try:
+        options = rh.find_options_by_expiration_and_strike(
+            inputSymbols=symbol,
+            expirationDate=expiry,
+            strikePrice=strike,
+            optionType=option_type,
+            info=None
+        )
+        if not options or len(options) == 0:
+            print(f"⚠️ No option contract found for {symbol} {strike}{option_type[0].upper()} {expiry}")
+            return 0, None
+
+        option = options[0]
+        ask_price = float(option.get("ask_price") or 0)
+
+        if ask_price <= 0:
+            print(f"⚠️ No valid ask price for {symbol} {strike}{option_type[0].upper()} {expiry}")
+            return 0, None
+
+        return ask_price, option
+
+    except Exception as e:
+        print(f"❌ Error fetching option quote: {e}")
+        return 0, None
+
 # ── Order execution ───────────────────────────────────────────────────────────
 def place_order(symbol, side, quantity, price):
     print(f"📤 Placing order: {side} {quantity} {symbol}")

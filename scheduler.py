@@ -76,14 +76,21 @@ schedule.every().day.at("13:30").do(market_open)   # 9:30am ET
 schedule.every().day.at("16:00").do(midday)         # 12:00pm ET
 schedule.every().day.at("19:30").do(market_close)   # 3:30pm ET
 
-# Position monitor every 15 mins
-schedule.every(15).minutes.do(run_monitor)
+def run_weekly_summary():
+    if not is_market_open():
+        return
+    print(f"\n📊 Running weekly summary...")
+    subprocess.run([sys.executable, "bot.py", "weekly_summary"])
+
+# Weekly summary every Friday at market close (3:30pm ET = 19:30 UTC)
+schedule.every().friday.at("19:35").do(run_weekly_summary)
 
 print("📅 Scheduler started.")
 print("   9:30am ET  → market open scan")
 print("  12:00pm ET  → midday scan")
 print("   3:30pm ET  → market close scan")
 print("   Every 15m  → position monitor (market hours only)")
+print("   Fri 3:35pm ET → weekly P&L summary")
 
 while True:
     schedule.run_pending()

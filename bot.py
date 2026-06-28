@@ -106,6 +106,40 @@ def check_sector_concentration(symbol, trade_value, portfolio_value, positions):
 
     return is_ok, current_pct, new_pct, sector
 
+# ── Earnings calendar check ───────────────────────────────────────────────────
+
+def check_upcoming_earnings(symbol, days_ahead=2):
+    """
+    Check if a symbol has earnings within the next `days_ahead` calendar days.
+    Returns (has_earnings_soon, earnings_date_str or None).
+    Fails safe — if data is unavailable, assumes no earnings risk rather than blocking trades.
+    """
+    try:
+        earnings = rh.stocks.get_earnings(symbol)
+        if not earnings:
+            return False, None
+
+        today = datetime.now(pytz.timezone('US/Eastern')).date()
+
+        for report in earnings:
+            date_str = report.get("report", {}).get("date") or report.get("date")
+            if not date_str:
+                continue
+            try:
+                report_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+
+            days_until = (report_date - today).days
+            if 0 <= days_until <= days_ahead:
+                return True, date_str
+
+        return False, None
+
+    except Exception as e:
+        print(f"⚠️ Could not check earnings for {symbol}: {e}")
+        return False, None
+
 # ── Robinhood login ───────────────────────────────────────────────────────────
 def rh_login():
     login = rh.login(
@@ -717,6 +751,11 @@ def run_scan(scan_type="manual"):
                     elif new_pct >= 25:
                         sector_warning = f"\n⚠️ Note: This brings {sector} exposure to {new_pct:.0f}% of account"
 
+                    # ── Earnings calendar check (buys only) ─────────────
+                    has_earnings, earnings_date = check_upcoming_earnings(symbol)
+                    if has_earnings:
+                        sector_warning += f"\n⚠️ EARNINGS RISK: {symbol} reports earnings on {earnings_date} — high volatility expected"
+                
                 quantity = round(trade_value / price, 6)
 
                 trade = {

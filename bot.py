@@ -29,6 +29,83 @@ APPROVAL_TIMEOUT   = int(os.environ.get("APPROVAL_TIMEOUT", "1800"))
 ACCOUNT_NUMBER     = os.environ["RH_ACCOUNT_NUMBER"]
 redis_client       = redis.from_url(os.environ["REDIS_URL"])
 
+# ── Sector mapping & concentration check ──────────────────────────────────────
+SECTOR_MAP = {
+    # Semiconductors
+    "NVDA": "semiconductors", "AMD": "semiconductors", "MU": "semiconductors",
+    "INTC": "semiconductors", "AVGO": "semiconductors", "QCOM": "semiconductors",
+    "TXN": "semiconductors", "ASML": "semiconductors", "AMAT": "semiconductors",
+    "LRCX": "semiconductors", "KLAC": "semiconductors", "SOXL": "semiconductors",
+    "SOXX": "semiconductors", "SMH": "semiconductors", "ARM": "semiconductors",
+
+    # Big tech / AI
+    "AAPL": "tech", "MSFT": "tech", "GOOGL": "tech", "GOOG": "tech",
+    "META": "tech", "AMZN": "tech", "TSLA": "tech", "ORCL": "tech",
+    "CRM": "tech", "ADBE": "tech", "PLTR": "ai", "AI": "ai",
+    "ARKK": "tech", "TECL": "tech", "QQQ": "tech",
+
+    # Cybersecurity
+    "CRWD": "cybersecurity", "PANW": "cybersecurity", "ZS": "cybersecurity",
+    "FTNT": "cybersecurity", "NET": "cybersecurity", "OKTA": "cybersecurity",
+
+    # Biotech / healthcare
+    "MRNA": "biotech", "PFE": "biotech", "JNJ": "biotech", "ABBV": "biotech",
+    "GILD": "biotech", "VRTX": "biotech", "REGN": "biotech", "XBI": "biotech",
+    "IBB": "biotech",
+
+    # Quantum computing
+    "IONQ": "quantum", "RGTI": "quantum", "QBTS": "quantum",
+
+    # Crypto
+    "BTC": "crypto", "ETH": "crypto", "SOL": "crypto", "DOGE": "crypto",
+
+    # Defensive / commodities
+    "GLD": "defensive", "SLV": "defensive", "TLT": "defensive",
+
+    # Brokerage / fintech
+    "HOOD": "fintech", "SOFI": "fintech", "COIN": "fintech", "AFRM": "fintech",
+
+    # Industrial / legacy tech
+    "IBM": "tech", "MRVL": "semiconductors", "TRIP": "travel",
+
+    # Broad market
+    "SPY": "broad_market", "VOO": "broad_market", "DIA": "broad_market",
+}
+
+def get_sector(symbol):
+    """Return the sector for a symbol, or 'other' if unknown."""
+    return SECTOR_MAP.get(symbol.upper(), "other")
+
+def check_sector_concentration(symbol, trade_value, portfolio_value, positions):
+    """
+    Check what % of the account would be in this sector after the trade.
+    Returns (is_ok, current_pct, new_pct, sector).
+    'other' sector is never flagged since we don't know what it overlaps with.
+    """
+    sector = get_sector(symbol)
+
+    if sector == "other":
+        return True, 0, 0, sector
+
+    # Sum current value of all positions in the same sector
+    current_sector_value = 0.0
+    for pos in positions:
+        pos_symbol = pos.get("symbol", "")
+        if get_sector(pos_symbol) == sector:
+            qty = float(pos.get("quantity", 0))
+            price = get_quote(pos_symbol)
+            if price > 0:
+                current_sector_value += qty * price
+
+    current_pct = (current_sector_value / portfolio_value * 100) if portfolio_value > 0 else 0
+    new_sector_value = current_sector_value + trade_value
+    new_pct = (new_sector_value / portfolio_value * 100) if portfolio_value > 0 else 0
+
+    # Flag if this trade would push sector concentration above 40% of account
+    is_ok = new_pct <= 40
+
+    return is_ok, current_pct, new_pct, sector
+
 # ── Robinhood login ───────────────────────────────────────────────────────────
 def rh_login():
     login = rh.login(

@@ -4,7 +4,10 @@ Robinhood AI Trading Bot
 - Uses Claude to analyze market and recommend trades
 - Sends Pushover notifications for approval before executing
 - Enforces: no margin, max 20% of account per trade (stocks AND options)
+- Sector concentration check (max 40% per sector)
+- Earnings calendar awareness (informational warning, not a block)
 - Position monitor every 15 mins with tiered alerts (no spam)
+- News headline alerts for held positions (free, no AI cost)
 - Weekly P&L summary every Friday at close
 """
 
@@ -87,7 +90,6 @@ def check_sector_concentration(symbol, trade_value, portfolio_value, positions):
     if sector == "other":
         return True, 0, 0, sector
 
-    # Sum current value of all positions in the same sector
     current_sector_value = 0.0
     for pos in positions:
         pos_symbol = pos.get("symbol", "")
@@ -101,13 +103,11 @@ def check_sector_concentration(symbol, trade_value, portfolio_value, positions):
     new_sector_value = current_sector_value + trade_value
     new_pct = (new_sector_value / portfolio_value * 100) if portfolio_value > 0 else 0
 
-    # Flag if this trade would push sector concentration above 40% of account
     is_ok = new_pct <= 40
 
     return is_ok, current_pct, new_pct, sector
 
 # ── Earnings calendar check ───────────────────────────────────────────────────
-
 def check_upcoming_earnings(symbol, days_ahead=2):
     """
     Check if a symbol has earnings within the next `days_ahead` calendar days.
@@ -139,6 +139,79 @@ def check_upcoming_earnings(symbol, days_ahead=2):
     except Exception as e:
         print(f"⚠️ Could not check earnings for {symbol}: {e}")
         return False, None
+
+# ── News headline check (free, no AI cost) ────────────────────────────────────
+def check_news_for_position(symbol):
+    """
+    Fetch recent news headlines for a symbol via Robinhood (free, no AI).
+    Sends a Pushover alert for any headline not seen before AND published recently.
+    Tracks seen headlines in Redis per symbol to avoid repeat alerts.
+    """
+    try:
+        news_items = rh.stocks.get_news(symbol)
+        if not news_items:
+            return
+
+        seen_key = f"news_seen:{symbol}"
+        seen_raw = redis_client.get(seen_key)
+        seen_titles = set(json.loads(seen_raw)) if seen_raw else set()
+        is_first_run = seen_raw is None
+
+        now = datetime.now(pytz.utc)
+        new_headlines = []
+
+        for item in news_items[:5]:
+            title = item.get("title", "").strip()
+            if not title or title in seen_titles:
+                continue
+
+            published_str = item.get("published_at", "")
+            is_recent = False
+            if published_str:
+                try:
+                    published_dt = datetime.strptime(published_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.utc)
+                    hours_old = (now - published_dt).total_seconds() / 3600
+                    is_recent = hours_old <= 6
+                except (ValueError, TypeError):
+                    is_recent = False
+
+            seen_titles.add(title)
+
+            if is_recent and not is_first_run:
+                new_headlines.append({
+                    "title": title,
+                    "source": item.get("source", "Unknown"),
+                })
+
+        if is_first_run:
+            print(f"📰 First run for {symbol} — caching {len(seen_titles)} existing headlines, no alerts sent")
+        elif new_headlines:
+            for headline in new_headlines[:3]:
+                send_notification(
+                    f"📰 News — {symbol}",
+                    f"{headline['title']}\n({headline['source']})",
+                    priority=0
+                )
+                print(f"📰 New headline for {symbol}: {headline['title']}")
+
+        trimmed = list(seen_titles)[-50:]
+        redis_client.set(seen_key, json.dumps(trimmed), ex=86400 * 7)
+
+    except Exception as e:
+        print(f"⚠️ Could not check news for {symbol}: {e}")
+
+def check_news_for_all_positions():
+    """Run news check for every currently held position."""
+    try:
+        positions = get_positions()
+        if not positions:
+            return
+        for position in positions:
+            symbol = position.get("symbol")
+            if symbol:
+                check_news_for_position(symbol)
+    except Exception as e:
+        print(f"❌ News check error: {e}")
 
 # ── Robinhood login ───────────────────────────────────────────────────────────
 def rh_login():
@@ -245,8 +318,7 @@ def place_option_order(symbol, option_type, strike, expiry, contracts, side, max
 
     if side == "buy":
         current_cost = contracts * ask_price * 100
-        # Re-check the cap at execution time too — price may have moved since approval
-        if max_cost and current_cost > max_cost * 1.15:  # allow 15% price drift, reject beyond that
+        if max_cost and current_cost > max_cost * 1.15:
             raise Exception(
                 f"Price moved too much since approval: now ${current_cost:.2f} "
                 f"(was capped at ${max_cost:.2f}). Order not placed for safety."
@@ -314,7 +386,6 @@ def send_approval_request(trade, trade_id):
             f"Quantity: {trade['quantity']} shares\n"
             f"Est. Value: ${trade['estimated_value']:.2f}\n"
             f"{trade.get('sector_warning', '')}"
-        )
         )
     msg = (
         f"🤖 Trade Recommendation #{trade_id}\n\n"
@@ -448,14 +519,12 @@ Search current market conditions and return ONLY the JSON object."""
 
         print(f"🔍 Response length: {len(full_text)} chars")
 
-        # Try 1: direct parse
         try:
             clean = full_text.strip().replace("```json", "").replace("```", "").strip()
             return json.loads(clean)
         except json.JSONDecodeError:
             pass
 
-        # Try 2: first { to last }
         try:
             start = full_text.index("{")
             end = full_text.rindex("}") + 1
@@ -463,7 +532,6 @@ Search current market conditions and return ONLY the JSON object."""
         except (ValueError, json.JSONDecodeError):
             pass
 
-        # Try 3: regex
         try:
             match = re.search(r'\{.*\}', full_text, re.DOTALL)
             if match:
@@ -564,6 +632,9 @@ def monitor_positions():
 
             elif tier == "neutral" and last_tier is not None:
                 redis_client.delete(last_tier_key)
+
+        # Check for breaking news on all held positions (free, no AI cost)
+        check_news_for_all_positions()
 
     except Exception as e:
         print(f"❌ Monitor error: {e}")
@@ -714,13 +785,13 @@ def run_scan(scan_type="manual"):
                 trade = {
                     "symbol":          symbol,
                     "side":            side,
-                    "quantity":        quantity,
-                    "price":           price,
-                    "estimated_value": trade_value,
+                    "quantity":        contracts,
+                    "price":           ask_price,
+                    "estimated_value": true_cost,
                     "reason":          reason,
-                    "asset_type":      asset_type,
-                    "option":          None,
-                    "sector_warning":  sector_warning,
+                    "asset_type":      "option",
+                    "option":          option_data,
+                    "sector_warning":  "",
                     "status":          "pending"
                 }
 
@@ -735,7 +806,7 @@ def run_scan(scan_type="manual"):
                     send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power")
                     continue
 
-                # ── Sector concentration check (buys only) ─────────────
+                # ── Sector concentration check (buys only) ──────────────
                 sector_warning = ""
                 if side == "buy":
                     is_ok, current_pct, new_pct, sector = check_sector_concentration(
@@ -755,7 +826,7 @@ def run_scan(scan_type="manual"):
                     has_earnings, earnings_date = check_upcoming_earnings(symbol)
                     if has_earnings:
                         sector_warning += f"\n⚠️ EARNINGS RISK: {symbol} reports earnings on {earnings_date} — high volatility expected"
-                
+
                 quantity = round(trade_value / price, 6)
 
                 trade = {
@@ -767,6 +838,7 @@ def run_scan(scan_type="manual"):
                     "reason":          reason,
                     "asset_type":      asset_type,
                     "option":          None,
+                    "sector_warning":  sector_warning,
                     "status":          "pending"
                 }
 

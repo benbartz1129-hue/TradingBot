@@ -457,8 +457,68 @@ def monitor_positions():
 
     except Exception as e:
         print(f"❌ Monitor error: {e}")
-        
+
+def send_weekly_summary():
+    """Compile and send a weekly P&L summary every Friday at close."""
+    try:
+        rh_login()
+        portfolio_value, buying_power = get_portfolio()
+
+        # Pull all history from the past 7 days
+        cutoff = time.time() - (7 * 86400)
+        history = []
+        for key in redis_client.scan_iter("history:*"):
+            data = redis_client.get(key)
+            if data:
+                entry = json.loads(data)
+                if entry.get("timestamp", 0) >= cutoff:
+                    history.append(entry)
+
+        if not history:
+            send_notification(
+                "📊 Weekly Summary",
+                f"No trades this week.\nCurrent balance: ${portfolio_value:.2f}"
+            )
+            return
+
+        executed = [h for h in history if h.get("outcome") == "executed"]
+        denied   = [h for h in history if h.get("outcome") in ["denied", "expired"]]
+        failed   = [h for h in history if h.get("outcome") == "failed"]
+
+        buys  = [h for h in executed if h.get("side") == "buy"]
+        sells = [h for h in executed if h.get("side") == "sell"]
+
+        total_bought = sum(h.get("estimated_value", 0) for h in buys)
+        total_sold   = sum(h.get("estimated_value", 0) for h in sells)
+
+        # Get starting balance from Redis (saved each Friday) or fall back to current
+        starting_balance_raw = redis_client.get("weekly_starting_balance")
+        starting_balance = float(starting_balance_raw) if starting_balance_raw else portfolio_value
+
+        pct_change = ((portfolio_value - starting_balance) / starting_balance * 100) if starting_balance > 0 else 0
+
+        symbols_traded = sorted(set(h.get("symbol") for h in executed))
+
+        msg = (
+            f"📊 WEEKLY SUMMARY\n\n"
+            f"Balance: ${starting_balance:.2f} → ${portfolio_value:.2f} ({pct_change:+.1f}%)\n\n"
+            f"Trades: {len(executed)} executed, {len(denied)} denied, {len(failed)} failed\n"
+            f"Bought: ${total_bought:.2f} | Sold: ${total_sold:.2f}\n"
+            f"Symbols: {', '.join(symbols_traded) if symbols_traded else 'none'}\n\n"
+            f"Have a good weekend! 📈"
+        )
+
+        send_notification("📊 Weekly Trading Summary", msg, priority=0)
+        print(f"📊 Weekly summary sent: {msg}")
+
+        # Save this week's ending balance as next week's starting point
+        redis_client.set("weekly_starting_balance", str(portfolio_value), ex=86400 * 10)
+
+    except Exception as e:
+        print(f"❌ Weekly summary error: {e}")
+
 # ── Main scan ─────────────────────────────────────────────────────────────────
+
 def run_scan(scan_type="manual"):
     print(f"\n{'='*50}")
     print(f"Running {scan_type} scan at {datetime.now()}")
@@ -639,5 +699,7 @@ if __name__ == "__main__":
     scan_type = sys.argv[1] if len(sys.argv) > 1 else "manual"
     if scan_type == "monitor":
         monitor_positions()
+    elif scan_type == "weekly_summary":
+        send_weekly_summary()
     else:
         run_scan(scan_type)

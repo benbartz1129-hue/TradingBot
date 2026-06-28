@@ -279,6 +279,8 @@ def send_approval_request(trade, trade_id):
             f"Action: {trade['side'].upper()} {trade['symbol']}\n"
             f"Quantity: {trade['quantity']} shares\n"
             f"Est. Value: ${trade['estimated_value']:.2f}\n"
+            f"{trade.get('sector_warning', '')}"
+        )
         )
     msg = (
         f"🤖 Trade Recommendation #{trade_id}\n\n"
@@ -678,12 +680,13 @@ def run_scan(scan_type="manual"):
                 trade = {
                     "symbol":          symbol,
                     "side":            side,
-                    "quantity":        contracts,
-                    "price":           ask_price,
-                    "estimated_value": true_cost,
+                    "quantity":        quantity,
+                    "price":           price,
+                    "estimated_value": trade_value,
                     "reason":          reason,
-                    "asset_type":      "option",
-                    "option":          option_data,
+                    "asset_type":      asset_type,
+                    "option":          None,
+                    "sector_warning":  sector_warning,
                     "status":          "pending"
                 }
 
@@ -697,6 +700,22 @@ def run_scan(scan_type="manual"):
                 if side == "buy" and trade_value > buying_power:
                     send_notification("⚠️ Skipped Trade", f"{symbol}: Not enough buying power")
                     continue
+
+                # ── Sector concentration check (buys only) ─────────────
+                sector_warning = ""
+                if side == "buy":
+                    is_ok, current_pct, new_pct, sector = check_sector_concentration(
+                        symbol, trade_value, portfolio_value, positions
+                    )
+                    if not is_ok:
+                        send_notification(
+                            "⚠️ Skipped Trade — Sector Concentration",
+                            f"{symbol} ({sector}): Would push {sector} to {new_pct:.0f}% of account "
+                            f"(currently {current_pct:.0f}%). Capped at 40% per sector."
+                        )
+                        continue
+                    elif new_pct >= 25:
+                        sector_warning = f"\n⚠️ Note: This brings {sector} exposure to {new_pct:.0f}% of account"
 
                 quantity = round(trade_value / price, 6)
 
